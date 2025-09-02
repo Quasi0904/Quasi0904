@@ -3,7 +3,8 @@
 主要步骤如下：
 
 ⭐根据Johnson L.C.的星表 PHAT Stellar Cluster Survey II. Andromeda Project Cluster Catalog找到需要研究的星团的相关信息，主要是APID,RADeg,DECDeg,Rap。
-使用hst的网站https://mast.stsci.edu/portal/Mashup/Clients/Mast/Portal.html找到包含该星团的图像并下载。下载的波段是F814W（对应文件夹jbf*10）、F475W（对应文件夹jbf*10），储存位置是'.../m31/origion/HST/jbf*'。
+使用hst的网站https://mast.stsci.edu/portal/Mashup/Clients/Mast/Portal.html;
+找到包含该星团的图像并下载。下载的波段是F814W（对应文件夹jbf*10）、F475W（对应文件夹jbf*10），储存位置是'.../m31/origion/HST/jbf*'。
 
 ⭐运行preprocess.py代码：
     出现“请输入原始数据文件夹名前缀 (例如: jbf8010)：”，输入星团对应图像的文件夹名前缀；
