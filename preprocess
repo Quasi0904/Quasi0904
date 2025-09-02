@@ -1,0 +1,58 @@
+import os
+import subprocess
+import glob
+import argparse
+
+def preprocess_images(input_dir):
+    # 保存当前工作目录
+    original_dir = os.getcwd()
+    
+    try:
+        # 切换到输入目录
+        os.chdir(input_dir)
+        print(f"当前工作目录: {os.getcwd()}")
+        
+        # 步骤1: 执行acsmask
+        print("步骤1/3: 执行acsmask...")
+        fits_files = glob.glob("*.fits")
+        if not fits_files:
+            raise FileNotFoundError(f"在目录 {input_dir} 中未找到FITS文件")
+        
+        subprocess.run(["acsmask"] + fits_files, check=True)
+        
+        # 步骤2: 执行splitgroups
+        print("步骤2/3: 执行splitgroups...")
+        subprocess.run(["splitgroups"] + fits_files, check=True)
+        
+        # 步骤3: 对每个chip文件执行calcsky
+        print("步骤3/3: 执行calcsky...")
+        chip_files = glob.glob("*chip?.fits")
+        if not chip_files:
+            raise FileNotFoundError(f"在目录 {input_dir} 中未找到chip文件")
+        
+        for chip_file in chip_files:
+            base_name = os.path.splitext(chip_file)[0]  # 移除.fits扩展名
+            print(f"处理: {base_name}")
+            subprocess.run(["calcsky", base_name, "15", "35", "4", "2.25", "2.00"], check=True)
+        # 检查文件
+        print("请检查文件是否完全处理")
+        subprocess.run(["ls"])
+    
+    finally:
+        # 恢复原始工作目录
+        os.chdir(original_dir)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='HST原始数据预处理')
+    parser.add_argument('input_dir', help='包含原始FITS文件的目录')
+    
+    args = parser.parse_args()
+    
+    print(f"开始预处理HST图像...")
+    print(f"输入目录: {args.input_dir}")
+    
+    # 确保目录存在
+    if not os.path.isdir(args.input_dir):
+        raise NotADirectoryError(f"目录不存在: {args.input_dir}")
+    
+    preprocess_images(args.input_dir)
