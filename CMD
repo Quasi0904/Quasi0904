@@ -1,0 +1,78 @@
+import pandas as pd
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.ticker import MultipleLocator
+import warnings
+warnings.filterwarnings("ignore")  # 忽略所有警告
+
+# 设置编号变量，只需修改此处即可处理不同编号的数据
+number = '50'
+
+# 根据编号构建文件路径
+file_path = f'/home/quasi/桌面/m31/JHONSON/J{number}/{number}.txt'
+
+# 读取数据，跳过以 '#' 开头的注释行
+df = pd.read_csv(file_path, delim_whitespace=True, comment='#',
+                 names=['RA_1', 'DEC_1', 'MAG_F475W', 'RA_2', 'DEC_2', 'MAG_F814W', 'Separation'])
+
+# 计算颜色（Color = F475W - F814W）
+df['Color'] = df['MAG_F475W'] - df['MAG_F814W']
+
+# 提取要绘制的数据
+color = df['Color']
+mag814 = df['MAG_F814W']
+
+# 创建图形和坐标轴
+plt.figure(figsize=(8, 8), dpi=100)
+ax = plt.gca()
+
+# 使用空心圆圈绘制数据点（设置边缘颜色，无填充色）
+plt.scatter(color, mag814, 
+            s=70,             # 点的大小
+            edgecolors='black',  # 边缘颜色
+            facecolors='none',      # 空心填充
+            alpha=0.8,        # 透明度
+            linewidths=0.8)   # 边缘线宽
+
+# 反转Y轴（星等越亮数值越小）
+ax.invert_yaxis()
+
+# 设置坐标轴标签和标题
+plt.xlabel('F475W - F814W', fontsize=10, fontweight='bold')
+plt.ylabel('F814W', fontsize=10, fontweight='bold')
+plt.title(f'J{number} Color-Magnitude Diagram', fontsize=14, fontweight='bold')
+
+# 设置网格线（浅灰色，虚线）
+plt.grid(True, 
+         linestyle='--', 
+         alpha=0.7,
+         color='lightgray')
+
+# 设置坐标轴范围和刻度
+plt.xlim(-2, 4)
+plt.ylim(28, 22)  # 注意反转后的范围设置
+
+# 添加次要刻度
+ax.xaxis.set_minor_locator(MultipleLocator(0.5))
+ax.yaxis.set_minor_locator(MultipleLocator(1))
+
+# 美化坐标轴
+ax.tick_params(axis='both', which='major', length=6, labelsize=10)
+ax.tick_params(axis='both', which='minor', length=3)
+
+# 添加背景色增强对比度
+ax.set_facecolor('#f8f9fa')
+
+# 添加图边框
+for spine in ax.spines.values():
+    spine.set_edgecolor('gray')
+    spine.set_linewidth(1)
+
+# 紧凑布局
+plt.tight_layout()
+
+# 可选：保存图像
+plt.savefig(f'/home/quasi/桌面/m31/JHONSON/J{number}/{number}.png')
+
+plt.show()
