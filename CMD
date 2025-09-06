@@ -28,16 +28,28 @@ df['Color'] = df['MAG_F475W'] - df['MAG_F814W']
 color = df['Color']
 mag814 = df['MAG_F814W']
 
-# 动态计算坐标轴范围
-x_min = np.floor(color.min()) - 1
-x_max = np.ceil(color.max()) + 1
-y_min = np.floor(mag814.min()) + 1  # 注意星等是反向的
-y_max = np.ceil(mag814.max()) - 1   # 注意星等是反向的
+# 确保数据有效（移除无穷大和NaN值）
+valid_data = df[np.isfinite(df['Color']) & np.isfinite(df['MAG_F814W'])]
+color = valid_data['Color']
+mag814 = valid_data['MAG_F814W']
+
+# 动态计算坐标轴范围（确保包含所有数据点并有适当边距）
+x_range = color.max() - color.min()
+y_range = mag814.max() - mag814.min()
+
+# 添加10%的边距
+x_margin = x_range * 0.1
+y_margin = y_range * 0.1
+
+x_min = color.min() - x_margin
+x_max = color.max() + x_margin
+y_min = mag814.min() - y_margin  
+y_max = mag814.max() + y_margin  
 
 # 创建图形和坐标轴
 fig, ax = plt.subplots(figsize=(8, 10), dpi=100)  # 调整图形比例为4:5，更适合CMD
 
-# 绘制数据点
+# 使用简单的黑色空心圆圈绘制数据点
 scatter = ax.scatter(color, mag814, 
             s=15,              # 点的大小
             edgecolors='black',  # 边缘颜色
@@ -55,12 +67,12 @@ ax.set_title(f'J{APID} Color-Magnitude Diagram', fontsize=14, fontweight='bold',
 
 # 设置坐标轴范围
 ax.set_xlim(x_min, x_max)
-ax.set_ylim(y_min, y_max)  
+ax.set_ylim(y_max, y_min)  # 注意反转后的范围设置
 
 # 设置网格线（浅灰色，虚线）
 ax.grid(True, 
-        linestyle=':',       
-        alpha=0.5,
+        linestyle=':',       # 使用点线，更细致
+        alpha=0.8,
         color='gray',
         linewidth=0.5)
 
@@ -81,7 +93,7 @@ for spine in ax.spines.values():
     spine.set_linewidth(1)
 
 # 添加文本标注（数据点数量和信息）
-n_stars = len(df)
+n_stars = len(valid_data)
 text_str = f'N = {n_stars}'
 ax.text(0.02, 0.98, text_str, transform=ax.transAxes, fontsize=10,
         verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
@@ -91,6 +103,5 @@ plt.tight_layout()
 
 # 保存图像
 plt.savefig(f'/home/quasi/桌面/m31/JHONSON/J{APID}/{APID}.png', dpi=300, bbox_inches='tight')
-
 
 plt.show()
