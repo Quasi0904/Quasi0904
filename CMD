@@ -6,15 +6,20 @@ from matplotlib.ticker import MultipleLocator
 import warnings
 warnings.filterwarnings("ignore")  # 忽略所有警告
 
+# 设置全局字体为LaTeX风格，更适合科研出版
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['mathtext.fontset'] = 'stix'
+plt.rcParams['font.size'] = 12
+
 # 设置编号变量，只需修改此处即可处理不同编号的数据
-APID = '50'
+APID = input("\n请输入APID：").strip()
 
 # 根据编号构建文件路径
 file_path = f'/home/quasi/桌面/m31/JHONSON/J{APID}/{APID}.txt'
 
 # 读取数据，跳过以 '#' 开头的注释行
 df = pd.read_csv(file_path, delim_whitespace=True, comment='#',
-                 names=['RA_1', 'DEC_1', 'MAG_F475W', 'RA_2', 'DEC_2', 'MAG_F814W', 'Separation'])
+                 names=['RA_1', 'DEC_1', 'MAG_F475W', 'MAG_uncertainty_475', 'RA_2', 'DEC_2', 'MAG_F814W', 'MAG_uncertainty_814', 'Separation'])
 
 # 计算颜色（Color = F475W - F814W）
 df['Color'] = df['MAG_F475W'] - df['MAG_F814W']
@@ -23,56 +28,69 @@ df['Color'] = df['MAG_F475W'] - df['MAG_F814W']
 color = df['Color']
 mag814 = df['MAG_F814W']
 
+# 动态计算坐标轴范围
+x_min = np.floor(color.min()) - 1
+x_max = np.ceil(color.max()) + 1
+y_min = np.floor(mag814.min()) + 1  # 注意星等是反向的
+y_max = np.ceil(mag814.max()) - 1   # 注意星等是反向的
+
 # 创建图形和坐标轴
-plt.figure(figsize=(8, 8), dpi=100)
-ax = plt.gca()
+fig, ax = plt.subplots(figsize=(8, 10), dpi=100)  # 调整图形比例为4:5，更适合CMD
 
-# 使用空心圆圈绘制数据点（设置边缘颜色，无填充色）
-plt.scatter(color, mag814, 
-            s=70,             # 点的大小
+# 绘制数据点
+scatter = ax.scatter(color, mag814, 
+            s=15,              # 点的大小
             edgecolors='black',  # 边缘颜色
-            facecolors='none',      # 空心填充
-            alpha=0.8,        # 透明度
-            linewidths=0.8)   # 边缘线宽
+            facecolors='none',   # 空心填充
+            alpha=0.7,         # 透明度
+            linewidths=0.5)    # 边缘线宽
 
-# 反转Y轴（星等越亮数值越小）
+# 反转Y轴
 ax.invert_yaxis()
 
 # 设置坐标轴标签和标题
-plt.xlabel('F475W - F814W', fontsize=10, fontweight='bold')
-plt.ylabel('F814W', fontsize=10, fontweight='bold')
-plt.title(f'J{number} Color-Magnitude Diagram', fontsize=14, fontweight='bold')
+ax.set_xlabel('F475W - F814W', fontsize=12, fontweight='bold')
+ax.set_ylabel('F814W', fontsize=12, fontweight='bold')
+ax.set_title(f'J{APID} Color-Magnitude Diagram', fontsize=14, fontweight='bold', pad=20)
+
+# 设置坐标轴范围
+ax.set_xlim(x_min, x_max)
+ax.set_ylim(y_min, y_max)  
 
 # 设置网格线（浅灰色，虚线）
-plt.grid(True, 
-         linestyle='--', 
-         alpha=0.7,
-         color='lightgray')
+ax.grid(True, 
+        linestyle=':',       
+        alpha=0.5,
+        color='gray',
+        linewidth=0.5)
 
-# 设置坐标轴范围和刻度
-plt.xlim(-2, 4)
-plt.ylim(28, 22)  # 注意反转后的范围设置
 
-# 添加次要刻度
-ax.xaxis.set_minor_locator(MultipleLocator(0.5))
-ax.yaxis.set_minor_locator(MultipleLocator(1))
+ax.xaxis.set_minor_locator(MultipleLocator(0.2))
+ax.yaxis.set_minor_locator(MultipleLocator(0.5))
 
-# 美化坐标轴
-ax.tick_params(axis='both', which='major', length=6, labelsize=10)
-ax.tick_params(axis='both', which='minor', length=3)
+
+ax.tick_params(axis='both', which='major', length=6, width=1, labelsize=10)
+ax.tick_params(axis='both', which='minor', length=3, width=0.5)
 
 # 添加背景色增强对比度
-ax.set_facecolor('#f8f9fa')
+ax.set_facecolor('#fafafa')
 
 # 添加图边框
 for spine in ax.spines.values():
-    spine.set_edgecolor('gray')
+    spine.set_color('black')
     spine.set_linewidth(1)
+
+# 添加文本标注（数据点数量和信息）
+n_stars = len(df)
+text_str = f'N = {n_stars}'
+ax.text(0.02, 0.98, text_str, transform=ax.transAxes, fontsize=10,
+        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
 # 紧凑布局
 plt.tight_layout()
 
-# 可选：保存图像
-plt.savefig(f'/home/quasi/桌面/m31/JHONSON/J{APID}/{APID}.png')
+# 保存图像
+plt.savefig(f'/home/quasi/桌面/m31/JHONSON/J{APID}/{APID}.png', dpi=300, bbox_inches='tight')
+
 
 plt.show()
