@@ -1,22 +1,40 @@
 import os
 import subprocess
 import glob
-import argparse
+import shutil
 
-def preprocess_images(input_dir):
+# ==============================
+# 全局配置
+# ==============================
+BASE_INPUT_DIR = "/home/quasi/桌面/m31/origion/HST"
+BASE_OUTPUT_DIR = "/home/quasi/桌面/m31/origion/raw"
+
+def preprocess_images(input_dir, output_dir):
+    """
+    执行原始数据预处理流程 (步骤1-3)
+    在输出目录中处理文件，不修改原始文件
+    """
     # 保存当前工作目录
     original_dir = os.getcwd()
     
     try:
-        # 切换到输入目录
-        os.chdir(input_dir)
+        # 确保输出目录存在
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 复制所有原始文件到输出目录
+        print("复制原始文件到输出目录...")
+        for file in glob.glob(os.path.join(input_dir, "*.fits")):
+            shutil.copy2(file, output_dir)
+        
+        # 切换到输出目录进行处理
+        os.chdir(output_dir)
         print(f"当前工作目录: {os.getcwd()}")
         
         # 步骤1: 执行acsmask
         print("步骤1/3: 执行acsmask...")
         fits_files = glob.glob("*.fits")
         if not fits_files:
-            raise FileNotFoundError(f"在目录 {input_dir} 中未找到FITS文件")
+            raise FileNotFoundError(f"在目录 {output_dir} 中未找到FITS文件")
         
         subprocess.run(["acsmask"] + fits_files, check=True)
         
@@ -28,31 +46,97 @@ def preprocess_images(input_dir):
         print("步骤3/3: 执行calcsky...")
         chip_files = glob.glob("*chip?.fits")
         if not chip_files:
-            raise FileNotFoundError(f"在目录 {input_dir} 中未找到chip文件")
+            raise FileNotFoundError(f"在目录 {output_dir} 中未找到chip文件")
         
         for chip_file in chip_files:
             base_name = os.path.splitext(chip_file)[0]  # 移除.fits扩展名
             print(f"处理: {base_name}")
             subprocess.run(["calcsky", base_name, "15", "35", "4", "2.25", "2.00"], check=True)
-        # 检查文件
-        print("请检查文件是否完全处理")
-        subprocess.run(["ls"])
-    
+        
+        print(f"预处理完成! 文件已保存到: {output_dir}")
+        
     finally:
         # 恢复原始工作目录
         os.chdir(original_dir)
 
+def check_existing_output(output_dir):
+    """
+    检查输出目录是否已存在
+    返回是否需要跳过处理
+    """
+    if os.path.exists(output_dir) and os.listdir(output_dir):
+        print(f"警告: 输出目录已存在且不为空: {output_dir}")
+        response = input("是否要覆盖现有文件? (y/n): ").strip().lower()
+        if response != 'y':
+            print(f"将跳过目录: {output_dir}")
+            return True
+    return False
+
+def get_user_input():
+    """获取用户输入"""
+    print("\n" + "="*50)
+    print("HST原始数据预处理系统")
+    print("="*50)
+    
+    # 输入原始数据文件夹名
+    folder_name = input("\n请输入原始数据文件夹名 (例如: jbf8010): ").strip()
+    if not folder_name:
+        print("错误: 文件夹名不能为空")
+        return None
+    
+    # 构建完整路径
+    input_dir = os.path.join(BASE_INPUT_DIR, folder_name)
+    output_dir = os.path.join(BASE_OUTPUT_DIR, folder_name)
+    
+    # 检查输入目录是否存在
+    if not os.path.exists(input_dir):
+        print(f"错误: 输入目录不存在 - {input_dir}")
+        return None
+    if not os.path.isdir(input_dir):
+        print(f"错误: 输入路径不是目录 - {input_dir}")
+        return None
+    
+    # 检查输出目录是否已存在
+    skip_processing = check_existing_output(output_dir)
+    
+    # 确认信息
+    print("\n" + "-"*50)
+    print("配置信息确认:")
+    print(f"原始数据目录: {input_dir}")
+    print(f"输出目录: {output_dir}")
+    print("-"*50)
+    
+    if skip_processing:
+        print("处理已取消")
+        return None
+    
+    confirm = input("\n确认开始处理? (y/n): ").strip().lower()
+    if confirm != 'y':
+        print("处理已取消")
+        return None
+    
+    return {
+        'input_dir': input_dir,
+        'output_dir': output_dir
+    }
+
+def main():
+    # 获取用户输入
+    params = get_user_input()
+    
+    if not params:
+        return
+    
+    print("\n" + "="*50)
+    print(f"开始处理 {os.path.basename(params['input_dir'])}")
+    print("="*50)
+    
+    # 执行预处理
+    preprocess_images(params['input_dir'], params['output_dir'])
+    
+    print("\n" + "="*50)
+    print("处理完成!")
+    print("="*50)
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='HST原始数据预处理')
-    parser.add_argument('input_dir', help='包含原始FITS文件的目录')
-    
-    args = parser.parse_args()
-    
-    print(f"开始预处理HST图像...")
-    print(f"输入目录: {args.input_dir}")
-    
-    # 确保目录存在
-    if not os.path.isdir(args.input_dir):
-        raise NotADirectoryError(f"目录不存在: {args.input_dir}")
-    
-    preprocess_images(args.input_dir)
+    main()
