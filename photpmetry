@@ -9,20 +9,14 @@ from astropy.nddata import Cutout2D
 import astropy.units as u
 import warnings
 import re
+import shutil
 
 # 忽略特定警告
 warnings.filterwarnings('ignore', category=RuntimeWarning, message=".*NAXES was not set.*")
 warnings.filterwarnings('ignore', category=RuntimeWarning, message=".*Lookup distortion.*")
 
-# ==============================
-# 全局配置
-# ==============================
 BASE_INPUT_DIR = "/home/quasi/桌面/m31/origion/raw"
 BASE_OUTPUT_DIR = "/home/quasi/桌面/m31/JHONSON"
-
-# ==============================
-# 图像裁剪相关函数
-# ==============================
 
 def clean_header(header):
     """清理头文件中的干扰关键字"""
@@ -48,7 +42,6 @@ def create_wcs(header):
             return wcs_orig
         else:
             print(f"错误: 无法创建基本WCS")
-            return None
 
 def cutout_fits(input_path, output_path, ra_deg, dec_deg, radius_arcsec):
     """裁剪FITS图像到目标区域"""
@@ -83,9 +76,6 @@ def cutout_fits(input_path, output_path, ra_deg, dec_deg, radius_arcsec):
             
             # 计算裁剪尺寸（像素）
             size_pix = int(radius_arcsec / pixel_scale)
-            print(f"像素比例: {pixel_scale:.4f} 角秒/像素")
-            print(f"中心像素位置: X={x:.2f}, Y={y:.2f}")
-            print(f"裁剪尺寸: {size_pix}×{size_pix} 像素")
             
             # 确保裁剪框在图像范围内
             naxis1, naxis2 = orig_header['NAXIS1'], orig_header['NAXIS2']
@@ -128,8 +118,6 @@ def cutout_fits(input_path, output_path, ra_deg, dec_deg, radius_arcsec):
             
             # 保存新文件
             new_hdu.writeto(output_path, overwrite=True)
-            print(f"已创建裁剪图像: {os.path.basename(output_path)}")
-            print(f"新尺寸: {width}x{height} 像素 (原尺寸: {naxis1}x{naxis2})")
             return True
     except Exception as e:
         import traceback
@@ -191,428 +179,241 @@ def find_matching_sky_file(chip_path):
     return None
 
 def process_cut(input_dir, output_dir, target_ra, target_dec, r_reff, multiplier=5.0):
-    """处理所有chip文件的裁剪"""
-    # 计算裁剪半径
+    """处理所有chip文件的裁剪（科学图像加波段，sky文件不改名）"""
+    from astropy.io import fits
+
     radius_arcsec = multiplier * r_reff
-    
-    # 确保输出目录存在
     os.makedirs(output_dir, exist_ok=True)
-    
-    # 处理所有chip文件
+
     processed = 0
     skipped = 0
     error_count = 0
     sky_processed = 0
     sky_missing = 0
-    
-    # 获取所有chip文件
+    results = []  # [(科学图像路径, 波段名), ...]
+
     chip_files = [f for f in os.listdir(input_dir) if f.endswith(('chip1.fits', 'chip2.fits'))]
-    print(f"找到 {len(chip_files)} 个chip文件")
-    
+
     for filename in chip_files:
         input_path = os.path.join(input_dir, filename)
-        
-        # 精确检查目标是否在chip内
+
+        # 检查目标是否在chip内
         if not check_chip_coverage(input_path, target_ra, target_dec):
-            print(f"\n跳过: {filename} (目标不在chip内)")
             skipped += 1
             continue
-            
-        output_path = os.path.join(output_dir, f"{filename}")
-        
-        print(f"\n处理: {filename}")
-        print(f"目标坐标: RA={target_ra}°, Dec={target_dec}°")
-        print(f"裁剪半径: {radius_arcsec} arcsec ({multiplier} × {r_reff} arcsec)")
-        
-        # 裁剪chip图像
+
+        output_path = os.path.join(output_dir, filename)
+
+        # 裁剪chip（科学图像）
         if cutout_fits(input_path, output_path, target_ra, target_dec, radius_arcsec):
+            # 读取FILTER，加波段名
+            filt = 'UNKNOWN'
+            try:
+                hdr = fits.getheader(output_path)
+                filt = hdr.get('FILTER')
+                if filt is None:
+                    with fits.open(output_path) as hdul:
+                        if len(hdul) > 1:
+                            filt = hdul[1].header.get('FILTER')
+                if filt:
+                    filt = filt.lower()
+                    base, ext = os.path.splitext(output_path)
+                    if '_flc' in base:
+                        base = base.replace('_flc', f'_{filt}_flc')
+                    elif '_drc' in base:
+                        base = base.replace('_drc', f'_{filt}_drc')
+                    new_path = base + ext
+                    os.rename(output_path, new_path)
+                    output_path = new_path
+                    results.append((output_path, filt.upper()))
+                else:
+                    results.append((output_path, 'UNKNOWN'))
+            except Exception as e:
+                results.append((output_path, 'UNKNOWN'))
+
             processed += 1
-            
-            # 查找并裁剪对应的sky图像
+
+            # 裁剪sky（不改名也不加波段）
             sky_path = find_matching_sky_file(input_path)
             if sky_path and os.path.exists(sky_path):
-                sky_output = os.path.join(output_dir, f"{os.path.basename(sky_path)}")
-                print(f"\n找到对应的sky图像: {os.path.basename(sky_path)}")
-                
+                sky_output = os.path.join(output_dir, os.path.basename(sky_path))
                 if cutout_fits(sky_path, sky_output, target_ra, target_dec, radius_arcsec):
                     sky_processed += 1
-                    print(f"成功裁剪sky图像: {os.path.basename(sky_output)}")
                 else:
-                    print(f"裁剪sky图像失败: {os.path.basename(sky_path)}")
+                    sky_missing += 1
             else:
-                print(f"警告: 未找到与 {filename} 对应的sky图像")
-                if sky_path:
-                    print(f"预期路径: {sky_path}")
                 sky_missing += 1
         else:
             error_count += 1
-    
-    print(f"\n裁剪处理完成!")
-    print(f"裁剪成功chip图像: {processed}")
-    print(f"裁剪成功sky图像: {sky_processed}")
-    print(f"跳过: {skipped}, 错误: {error_count}")
-    if sky_missing > 0:
-        print(f"警告: {sky_missing} 个chip文件未找到对应的sky图像")
-    
-    return processed > 0  # 返回是否成功处理了文件
 
-# ==============================
-# 坐标转换函数
-# ==============================
+    print(f"\n裁剪处理完成! 裁剪成功chip图像: {processed}, sky图像: {sky_processed}, 跳过: {skipped}, 错误: {error_count}")
+    if sky_missing:
+        print(f"警告: {sky_missing} 个chip文件未找到对应sky图像")
 
-def transform_coordinates(input_txt, output_txt, fits_file, folder_id, wavelength):
-    """
-    执行坐标转换
-    :param input_txt: 输入星表文件
-    :param output_txt: 输出星表文件
-    :param fits_file: 参考FITS文件
-    :param folder_id: 文件夹ID
-    :param wavelength: 波长值
-    """
-    try:
-        # 读取FITS文件获取WCS
-        with fits.open(fits_file) as hdul:
-            wcs = WCS(hdul[0].header)
-    except FileNotFoundError:
-        print(f"错误：找不到FITS文件 {fits_file}")
-        return False
-    
-    try:
-        # 读取像素坐标和星等数据
-        data = np.loadtxt(input_txt)
-    except FileNotFoundError:
-        print(f"错误：找不到数据文件 {input_txt}")
-        return False
-    
-    # 处理数据
-    if data.ndim == 1:
-        # 如果只有一行数据，转换为二维数组
-        data = data.reshape(1, -1)
-    
-    x_pix = data[:, 0]
-    y_pix = data[:, 1]
-    mag = data[:, 2]
-    mag_uncertenty = data[:,3]
-    
-    # 像素坐标转天球坐标
-    sky_coords = wcs.pixel_to_world(x_pix, y_pix)
-    ra = sky_coords.ra.deg
-    dec = sky_coords.dec.deg
-    
-    # 保存结果
-    output_data = np.column_stack((ra, dec, mag, mag_uncertenty))
-    np.savetxt(output_txt, output_data, 
-               fmt='%.8f %.8f %.3f %.3f',
-               header=f'RA(deg) DEC(deg) MAG MAG_uncertainty', 
-               comments='#')
-    
-    print(f'转换完成! 结果已保存至: {output_txt}')
-    print(f'处理详情: 文件夹 {folder_id}, 波长 {wavelength}')
-    return True
-
-# ==============================
-# DOLPHOT参数文件生成
-# ==============================
-
-def generate_dolphot_param(output_dir, wavelength, folder_id):
-    """生成DOLPHOT参数文件"""
-    param_file = os.path.join(output_dir, f"{wavelength}.param")
-    
-    # 获取所有裁剪后的图像文件
-    all_files = glob.glob(os.path.join(output_dir, '*.fits'))
-    
-    # 分离_drc.chip1文件和其他文件
-    drc_files = [f for f in all_files if '_drc.chip1.fits' in f]
-    flc_files = [f for f in all_files if '_flc.chip' in f and '.sky.' not in f]
-    
-    if not drc_files:
-        print("错误: 未找到_drc.chip1参考图像")
-        return None
-    
-    # 参考图像
-    ref_file = os.path.basename(drc_files[0])
-    ref_base = ref_file.replace('.fits', '')
-    
-    # 计算Nimg - 只包括flc文件的数量
-    nimg = len(flc_files)
-    
-    # 构建参数文件内容
-    param_content = f"""Nimg = {nimg} # specifies the number of science images (excluding reference)
-img0_file = {ref_base} # reference image
-img0_shift = 0 0  # shift in (x,y) pixels wrt to reference image. Should not be set for reference image.
-img0_xform = 1 0 0 # scale ratio, cubic distortion, and rotation of the image relative to the reference image.Should not be set for reference image.
-"""
-
-    # 添加其他FLT图像（从img1开始编号）
-    for i, file_path in enumerate(flc_files, start=1):
-        file_name = os.path.basename(file_path)
-        base_name = file_name.replace('.fits', '')
-        param_content += f"img{i}_file = {base_name}\n"
-        param_content += f"img{i}_shift = 0 0\n"
-        param_content += f"img{i}_xform = 1 0 0\n"
-    
-    # 添加固定参数部分
-    param_content += """
-RAper = 3            #photometry apeture size (flt)
-Rchi = 3.0           #chi statistic apeture size (flt)
-PSFPhot = 1          #photometry type (int/0=aper,1=psf,2=wtd-psf)
-FitSky = 2           #fit sky? (int/0=no,1=yes,2=small,3=with-phot)
-RSky0 = 15           #inner sky radius (flt>=RAper+0.5)
-Rsky1 = 35           #outer sky radius (flt>=RSky0+1)
-SkipSky = 2          #spacing for sky measurement (int>0)
-SkySig = 2.25        #sigma clipping for sky (flt>=1)
-SecondPass = 5       #second pass finding stars (int 0=no,1=yes)
-SearchMode = 1       #searching algorithm (int 0=S/N/chi,1=1/chi)
-SigFind = 2.5        #sigma detection threshold (flt)
-SigFindMult = 0.85   #Multiple for quick-and-dirty photometry (flt>0)
-SigFinal = 3.5       #sigma output threshold (flt)
-SubResRef = 1        #subpixel resolution for reference image (int>0)
-MaxIT = 25           #maximum iterations (int>0)
-NoiseMult = 0.10     #noise multiple in imgadd (flt)
-FSat = 0.999         #fraction of saturate limit (flt)
-FlagMask = 4         #Use Saturated Cores? (4 if yes)
-ApCor = 1            #find/make aperture corrections? (int 0=no,1=yes)
-Force1 = 1           #force type 1/2 (stars)? (int 0=no,1=yes)
-Align = 2            #align images? (int 0=no,1=const,2=lin,3=cube)
-Rotate = 1           #allow cross terms in alignment? (int 0=no, 1=yes)
-RCentroid = 1        #centroid box size (int>0)
-PosStep = 0.25       #search step for position iterations (flt)
-dPosMax = 2.5        #maximum single-step in position iterations (flt)
-RCombine = 3.0       #minimum separation for two stars for cleaning (flt)
-RPSF = 10            #PSF size (int>0)
-SigPSF = 5.0         #min S/N for psf parameter (flt)
-PSFres = 1           #make PSF residual image? (int 0=no,1=yes)
-psfoff = 0.0         #coordinate offset (PSF system - dolphot system)
-DiagPlotType = PS    # create .ps diagnostic plots (requires pgplot)
-UseWCS = 1           # use WCS from .fits headers for alignment
-ACSpsfType = 0       # 0 = Tiny Tim, 1 = Anderson
-InterpPSFlib = 1     #interpolate PSF library spatially
-ACSuseCTE = 0        # use CTE corrections y/n = 1/0
-CombineChi = 1       # weight combined photometry by chi^2 per exposure y/n = 1/0
-"""
-    
-    with open(param_file, 'w') as f:
-        f.write(param_content)
-    
-    print(f"参数文件已生成: {param_file}")
-    print(f"参考图像: {ref_base}")
-    print(f"FLT图像数量: {nimg}")
-    for i, file_path in enumerate(flc_files, start=1):
-        print(f"img{i}_file: {os.path.basename(file_path).replace('.fits', '')}")
-    
-    return param_file
-
-# ==============================
-# 交互式输入函数
-# ==============================
+    return results  
 
 def get_user_input():
-    """获取用户输入"""
-    print("\n" + "="*50)
-    print("HST图像测光处理系统")
-    print("="*50)
-    
-    # 输入原始数据文件夹名前缀
-    folder_prefix = input("\n请输入原始数据文件夹名除最后两位10或20的前缀：").strip()
-    if not folder_prefix:
-        print("错误: 文件夹名前缀不能为空")
-        return None
-    
-    # 输入文件夹ID
-    folder_id = input("\n请输入文件夹ID (例如: 1 对应 J1): ").strip()
-    if not folder_id.isdigit():
-        print("错误: 文件夹ID必须是数字")
-        return None
-    
-    # 输入目标坐标
-    try:
-        target_ra = float(input("\n请输入目标赤经 (deg): ").strip())
-        target_dec = float(input("请输入目标赤纬 (deg): ").strip())
-        r_reff = float(input("请输入有效半径 (arcsec): ").strip())
-    except ValueError:
-        print("错误: 输入必须是数字")
-        return None
-    
-    # 构建两个波段的文件夹名
-    folders = [
-        {"name": f"{folder_prefix}10", "wavelength": "814"},
-        {"name": f"{folder_prefix}20", "wavelength": "475"}
-    ]
-    
-    # 构建路径
-    input_dirs = [os.path.join(BASE_INPUT_DIR, f["name"]) for f in folders]
-    output_dirs = [os.path.join(BASE_OUTPUT_DIR, f"J{folder_id}", f["wavelength"]) for f in folders]
-    
-    # 确认信息
-    print("\n" + "-"*50)
-    print("配置信息确认:")
-    print(f"文件夹ID: J{folder_id}")
-    print(f"目标坐标: RA={target_ra}°, Dec={target_dec}°")
-    print(f"有效半径: {r_reff} 角秒")
-    print("\n将处理以下两个波段:")
-    for i, f in enumerate(folders, 1):
-        print(f"波段 {i}:")
-        print(f"  原始数据目录: {input_dirs[i-1]}")
-        print(f"  输出目录: {output_dirs[i-1]}")
-        print(f"  波长: {f['wavelength']}")
-    print("-"*50)
-    
+    folder_prefix = input("\n请输入原始数据文件夹名（不含最后两位）：").strip()
+    folder_id = input("请输入APID（目标ID）：").strip()
+    target_ra = float(input("目标中心RA (deg): ").strip())
+    target_dec = float(input("目标中心DEC (deg): ").strip())
+    r_reff = float(input("裁剪半径(arcsec): ").strip())
+
     confirm = input("\n确认开始处理? (y/n): ").strip().lower()
     if confirm != 'y':
-        print("处理已取消")
         return None
-    
+
+    raw_dir = os.path.join(BASE_INPUT_DIR, folder_prefix)
+    data_dir = os.path.join(BASE_OUTPUT_DIR, f"J{folder_id}", "data")
+
+    os.makedirs(data_dir, exist_ok=True)
+
     return {
-        'folders': folders,
-        'input_dirs': input_dirs,
-        'output_dirs': output_dirs,
+        'raw_dir': raw_dir,
+        'data_dir': data_dir,
         'folder_id': folder_id,
         'target_ra': target_ra,
         'target_dec': target_dec,
         'r_reff': r_reff
     }
 
-# ==============================
-# 主测光处理流程
-# ==============================
+def extract_catalog_with_coords(phot_path, ref_image_path, band_filters, output_txt):
+    """
+    读取 DOLPHOT phot 文件，结合参考图像 WCS 转换成 RA/DEC，并输出包含各波段 MAG/ERR 的源表。
+    """
+    # 读取 phot 数据
+    data = np.loadtxt(phot_path, comments='#')
 
-def process_photometry(params):
-    """执行测光与分析流程"""
-    # 解包参数
-    folders = params['folders']
-    input_dirs = params['input_dirs']
-    output_dirs = params['output_dirs']
+    # 获取像素坐标（DOLPHOT列定义第3、4列为X/Y像素）
+    x_pix = data[:, 2]
+    y_pix = data[:, 3]
+
+    # 加载参考图像的WCS并转换
+    with fits.open(ref_image_path) as hdul:
+        wcs = WCS(hdul[0].header)
+    sky_coords = wcs.pixel_to_world(x_pix, y_pix)
+    ra_deg = sky_coords.ra.deg
+    dec_deg = sky_coords.dec.deg
+
+    # 提取每个波段的 VegaMag 及其误差
+    band_results = []
+    for b in band_filters:
+        if b.endswith('F475W'):
+            mag_col = 16   # 第17列 (0-based索引16)
+            err_col = 18   # 第19列 (0-based索引18)
+        elif b.endswith('F814W'):
+            mag_col = 29   # 第30列
+            err_col = 31   # 第32列
+        else:
+            raise ValueError(f"未知波段 {b}")
+        mags = data[:, mag_col]
+        errs = data[:, err_col]
+        band_results.append((mags, errs))
+
+    # 组装输出数组
+    cols = [ra_deg, dec_deg]
+    header_cols = ["RA", "DEC"]
+    for i, b in enumerate(band_filters):
+        cols.append(band_results[i][0])
+        cols.append(band_results[i][1])
+        header_cols.append(f"{b}_MAG")
+        header_cols.append(f"{b}_ERR")
+
+    out_arr = np.column_stack(cols)
+    header = " ".join(header_cols)
+    np.savetxt(output_txt, out_arr, fmt="%.6f", header=header)
+    print(f"星表已保存到: {output_txt}")
+
+def process_photometry_multi(params):
+    """多波段联合测光"""
+    raw_dir = params['raw_dir']
+    data_dir = params['data_dir']
     folder_id = params['folder_id']
     target_ra = params['target_ra']
     target_dec = params['target_dec']
     r_reff = params['r_reff']
-    
-    # 保存原始工作目录
-    original_dir = os.getcwd()
-    
-    # 处理每个波段
-    for i, folder in enumerate(folders):
-        input_dir = input_dirs[i]
-        output_dir = output_dirs[i]
-        wavelength = folder['wavelength']
-        
-        print("\n" + "="*50)
-        print(f"开始处理 {wavelength} 波段")
-        print("="*50)
-        
-        # 检查输入目录是否存在
-        if not os.path.exists(input_dir):
-            print(f"错误: 输入目录不存在 - {input_dir}")
-            continue
-        if not os.path.isdir(input_dir):
-            print(f"错误: 输入路径不是目录 - {input_dir}")
-            continue
-        
-        try:
-            # 步骤1: 裁剪图像
-            print("\n" + "-"*50)
-            print(f"步骤1: {wavelength} 波段图像裁剪")
-            print("-"*50)
-            if not process_cut(input_dir, output_dir, target_ra, target_dec, r_reff):
-                print("裁剪处理失败，跳过此波段")
-                continue
-            
-            # 步骤2: 生成DOLPHOT参数文件
-            print("\n" + "-"*50)
-            print(f"步骤2: {wavelength} 波段生成参数文件")
-            print("-"*50)
-            param_file = generate_dolphot_param(output_dir, wavelength, folder_id)
-            if not param_file:
-                print("参数文件生成失败，跳过此波段")
-                continue
-            
-            # 切换到输出目录，后续步骤都在这里执行
-            os.chdir(output_dir)
-            print(f"切换到工作目录: {os.getcwd()}")
-            
-            # 步骤3: 运行DOLPHOT
-            print("\n" + "-"*50)
-            print(f"步骤3: {wavelength} 波段运行DOLPHOT")
-            print("-"*50)
-            phot_output = f"{folder_id}_{wavelength}.phot"
-            
-            # 运行dolphot命令
-            cmd = f"dolphot {phot_output} -p{wavelength}.param"
-            print(f"执行命令: {cmd}")
-            subprocess.run(cmd, shell=True, check=True)
-            
-            # 检查输出文件是否存在
-            if not os.path.exists(phot_output):
-                print(f"错误: Dolphot输出文件 {phot_output} 未生成")
-                continue
-            
-            print(f"Dolphot成功完成! 输出文件: {phot_output}")
-            
-            # 步骤4: 提取测光结果
-            print("\n" + "-"*50)
-            print(f"步骤4: {wavelength} 波段提取测光结果")
-            print("-"*50)
-            stars_data_file = f"{folder_id}_{wavelength}.txt"
-            
-            awk_cmd = (
-                f"awk 'NR > 1 && $17 != 99.999 && $19 != 99.999 && $25 == 0 && $7 > -0.3 && $7 < 0.3 "
-                f"{{print $3, $4, $17, $19, $11, $6, $7, $8, $10, $25}}' {phot_output} > {stars_data_file}"
-            )
-            print(f"执行命令: {awk_cmd}")
-            subprocess.run(awk_cmd, shell=True, check=True)
-            
-            # 检查输出文件
-            if not os.path.exists(stars_data_file):
-                print(f"错误: 筛选后的星表 {stars_data_file} 未生成")
-                continue
-            
-            print(f"测光结果提取成功: {stars_data_file}")
-            
-            # 步骤5: 坐标转换
-            print("\n" + "-"*50)
-            print(f"步骤5: {wavelength} 波段坐标转换")
-            print("-"*50)
-            # 获取参考FITS文件
-            ref_fits = glob.glob("*_drc.chip1.fits")
-            if not ref_fits:
-                print("错误: 未找到参考FITS文件")
-                continue
-            
-            ref_fits = ref_fits[0]  # 使用第一个_drc.chip1文件作为参考
-            
-            # 设置输出文件路径
-            transformed_file = os.path.join(os.path.dirname(output_dir), f"J{folder_id}_{wavelength}.txt")
-            
-            # 执行坐标转换
-            transform_coordinates(
-                input_txt=stars_data_file,
-                output_txt=transformed_file,
-                fits_file=ref_fits,
-                folder_id=folder_id,
-                wavelength=wavelength
-            )
-            
-            print(f"{wavelength} 波段处理完成! 结果保存在: {transformed_file}")
-            
-        except subprocess.CalledProcessError as e:
-            print(f"处理失败: {e}")
-        finally:
-            # 恢复原始工作目录
-            os.chdir(original_dir)
-            print(f"恢复原始工作目录: {original_dir}")
-    
-    print("\n" + "="*50)
-    print("所有波段处理完成!")
-    print("="*50)
 
-# ==============================
-# 主程序入口
-# ==============================
+    # 第一步：裁剪所有chip文件
+    cut_results = process_cut(raw_dir, data_dir, target_ra, target_dec, r_reff)
+    if not cut_results:
+        print("无裁剪结果，结束。")
+        return
+
+    cut_files = [os.path.basename(p) for p, _ in cut_results]
+    band_names = [b for _, b in cut_results]  # 记录波段对应顺序
+
+    # 第二步：生成.param文件
+    science_files = [f for f in cut_files if '.sky.' not in f]
+
+    drc_files = [f for f in science_files if '_drc.chip1' in f]
+    if not drc_files:
+        print("未找到 _drc.chip1 参考图像")
+        return
+
+    # 选第一张 drc 作为参考图像
+    ref_image = drc_files[0]
+    ref_base = os.path.splitext(ref_image)[0]
+
+    # 其他 science 文件 = flc 文件（排除所有 drc/sky）
+    science_others = [f for f in science_files if '_drc.chip1' not in f]
+
+    param_file = os.path.join(data_dir, f"{folder_id}.param")
+    with open(param_file, "w") as f:
+        f.write(f"Nimg = {len(science_others)}\n")
+        f.write(f"img0_file = {ref_base}\nimg0_shift = 0 0\nimg0_xform = 1 0 0\n")
+        for idx, img in enumerate(science_others, start=1):
+            f.write(f"img{idx}_file = {os.path.splitext(img)[0]}\n")
+            f.write(f"img{idx}_shift = 0 0\nimg{idx}_xform = 1 0 0\n")
+        # 固定参数
+        f.write("""
+    RAper = 3
+    Rchi = 3.0
+    PSFPhot = 1
+    FitSky = 2
+    RSky0 = 15
+    Rsky1 = 35
+    SkipSky = 2
+    SkySig = 2.25
+    SecondPass = 5
+    SearchMode = 1
+    SigFind = 2.5
+    SigFindMult = 0.85
+    SigFinal = 3.5
+    SubResRef = 1
+    MaxIT = 25
+    NoiseMult = 0.10
+    FSat = 0.999
+    FlagMask = 4
+    ApCor = 1
+    Force1 = 1
+    Align = 2
+    Rotate = 1
+    RCentroid = 1
+    PosStep = 0.25
+    dPosMax = 2.5
+    RCombine = 3.0
+    RPSF = 10
+    SigPSF = 5.0
+    PSFres = 1
+    psfoff = 0.0
+    DiagPlotType = PS
+    UseWCS = 1
+    ACSpsfType = 0
+    InterpPSFlib = 1
+    ACSuseCTE = 0
+    CombineChi = 1
+    """)
+
+    # 第三步：运行 DOLPHOT
+    phot_path = os.path.join(data_dir, f"{folder_id}.phot")
+    subprocess.run(f"cd {data_dir} && dolphot {phot_path} -p{os.path.basename(param_file)}", shell=True, check=True)
+
+    # 第四步：转换 RA/DEC 提取星表
+    ref_image_path = os.path.join(data_dir, ref_image)
+    output_txt = os.path.join(BASE_OUTPUT_DIR, f"J{folder_id}", f"{folder_id}.txt")
+    extract_catalog_with_coords(phot_path, ref_image_path, ['ACS_F475W', 'ACS_F814W'], output_txt)
 
 if __name__ == "__main__":
-    # 获取用户输入
     params = get_user_input()
-    
     if params:
-        # 执行处理流程
-        process_photometry(params)
+        process_photometry_multi(params)
