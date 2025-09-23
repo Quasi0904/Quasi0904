@@ -15,8 +15,8 @@ import shutil
 warnings.filterwarnings('ignore', category=RuntimeWarning, message=".*NAXES was not set.*")
 warnings.filterwarnings('ignore', category=RuntimeWarning, message=".*Lookup distortion.*")
 
-BASE_INPUT_DIR = "/home/quasi/桌面/m31/origion/raw"
-BASE_OUTPUT_DIR = "/home/quasi/桌面/m31/JHONSON"
+BASE_INPUT_DIR = "/media/quasi/kyx/m31/origion/raw"
+BASE_OUTPUT_DIR = "/media/quasi/kyx/m31/JHONSON"
 
 def clean_header(header):
     """清理头文件中的干扰关键字"""
@@ -257,7 +257,7 @@ def get_user_input():
     folder_id = input("请输入APID（目标ID）：").strip()
     target_ra = float(input("目标中心RA (deg): ").strip())
     target_dec = float(input("目标中心DEC (deg): ").strip())
-    r_reff = float(input("裁剪半径(arcsec): ").strip())
+    r_reff = float(input("星团半径(arcsec): ").strip())
 
     confirm = input("\n确认开始处理? (y/n): ").strip().lower()
     if confirm != 'y':
@@ -325,7 +325,7 @@ def extract_catalog_with_coords(phot_path, ref_image_path, band_filters, output_
     print(f"星表已保存到: {output_txt}")
 
 def process_photometry_multi(params):
-    """多波段联合测光"""
+    """多波段联合测光（带测光结果过滤与坐标转换）"""
     raw_dir = params['raw_dir']
     data_dir = params['data_dir']
     folder_id = params['folder_id']
@@ -340,7 +340,6 @@ def process_photometry_multi(params):
         return
 
     cut_files = [os.path.basename(p) for p, _ in cut_results]
-    band_names = [b for _, b in cut_results]  # 记录波段对应顺序
 
     # 第二步：生成.param文件
     science_files = [f for f in cut_files if '.sky.' not in f]
@@ -366,52 +365,87 @@ def process_photometry_multi(params):
             f.write(f"img{idx}_shift = 0 0\nimg{idx}_xform = 1 0 0\n")
         # 固定参数
         f.write("""
-    RAper = 3
-    Rchi = 3.0
-    PSFPhot = 1
-    FitSky = 2
-    RSky0 = 15
-    Rsky1 = 35
-    SkipSky = 2
-    SkySig = 2.25
-    SecondPass = 5
-    SearchMode = 1
-    SigFind = 2.5
-    SigFindMult = 0.85
-    SigFinal = 3.5
-    SubResRef = 1
-    MaxIT = 25
-    NoiseMult = 0.10
-    FSat = 0.999
-    FlagMask = 4
-    ApCor = 1
-    Force1 = 1
-    Align = 2
-    Rotate = 1
-    RCentroid = 1
-    PosStep = 0.25
-    dPosMax = 2.5
-    RCombine = 3.0
-    RPSF = 10
-    SigPSF = 5.0
-    PSFres = 1
-    psfoff = 0.0
-    DiagPlotType = PS
-    UseWCS = 1
-    ACSpsfType = 0
-    InterpPSFlib = 1
-    ACSuseCTE = 0
-    CombineChi = 1
-    """)
+RAper = 3
+Rchi = 3.0
+PSFPhot = 1
+FitSky = 2
+RSky0 = 15
+Rsky1 = 35
+SkipSky = 2
+SkySig = 2.25
+SecondPass = 5
+SearchMode = 1
+SigFind = 2.5
+SigFindMult = 0.85
+SigFinal = 3.5
+SubResRef = 1
+MaxIT = 25
+NoiseMult = 0.10
+FSat = 0.999
+FlagMask = 4
+ApCor = 1
+Force1 = 1
+Align = 2
+Rotate = 1
+RCentroid = 1
+PosStep = 0.25
+dPosMax = 2.5
+RCombine = 3.0
+RPSF = 10
+SigPSF = 5.0
+PSFres = 1
+psfoff = 0.0
+DiagPlotType = PS
+UseWCS = 1
+ACSpsfType = 0
+InterpPSFlib = 1
+ACSuseCTE = 0
+CombineChi = 1
+""")
 
     # 第三步：运行 DOLPHOT
     phot_path = os.path.join(data_dir, f"{folder_id}.phot")
-    subprocess.run(f"cd {data_dir} && dolphot {phot_path} -p{os.path.basename(param_file)}", shell=True, check=True)
+    subprocess.run(f"cd {data_dir} && dolphot {phot_path} -p{os.path.basename(param_file)}",
+                   shell=True, check=True)
 
-    # 第四步：转换 RA/DEC 提取星表
-    ref_image_path = os.path.join(data_dir, ref_image)
-    output_txt = os.path.join(BASE_OUTPUT_DIR, f"J{folder_id}", f"{folder_id}.txt")
-    extract_catalog_with_coords(phot_path, ref_image_path, ['ACS_F475W', 'ACS_F814W'], output_txt)
+    # 第四步：用 numpy 等效 AWK 条件筛选并提取指定列
+    print("\n" + "-"*50)
+    print("步骤4: 筛选并提取指定列")
+    print("-"*50)
+
+    data = np.loadtxt(phot_path, comments='#')
+
+    mask = (
+        (data[:, 16] != 99.999) &  # $17 != 99.999
+        (data[:, 18] != 99.999) &  # $19 != 99.999
+        (data[:, 24] == 0) &       # $25 == 0
+        (data[:, 6] > -0.3) &      # $7 > -0.3
+        (data[:, 6] < 0.3)         # $7 < 0.3
+    )
+
+    filtered = data[mask]
+
+    # 提取 X,Y & 两个波段的 MAG/ERR
+    x_pix = filtered[:, 2]  # $3
+    y_pix = filtered[:, 3]  # $4
+    mag_475 = filtered[:, 16]  # $17
+    err_475 = filtered[:, 18]  # $19
+    mag_814 = filtered[:, 29]  # $30
+    err_814 = filtered[:, 31]  # $32
+
+    # WCS 转 RA/DEC
+    with fits.open(os.path.join(data_dir, ref_image)) as hdul:
+        wcs = WCS(hdul[0].header)
+    coords = wcs.pixel_to_world(x_pix, y_pix)
+    ra = coords.ra.deg
+    dec = coords.dec.deg
+
+    # 保存最终结果
+    final_arr = np.column_stack((ra, dec, mag_475, err_475, mag_814, err_814))
+    header = "RA DEC ACS_F475W_MAG ACS_F475W_ERR ACS_F814W_MAG ACS_F814W_ERR"
+    final_txt = os.path.join(BASE_OUTPUT_DIR, f"J{folder_id}", f"{folder_id}.txt")
+    np.savetxt(final_txt, final_arr, fmt="%.6f", header=header)
+    print(f"最终星表已保存: {final_txt}")
 
 if __name__ == "__main__":
     params = get_user_input()
